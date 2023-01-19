@@ -1,11 +1,12 @@
 const express = require('express')
 const app = express()
 const port = 3000
+const store = require('store2')
+const Decimal = require('decimal.js')
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-const store = require('store2')
 store('wallets', [])
 store('tx', [])
 
@@ -16,15 +17,15 @@ function getTodayBalanceChange(id) {
     let y = date.getFullYear()
     let m = date.getMonth()
     let d = date.getDate()
-    let todayStart = new Date(y, m, d, 0, 0, 0, 0).getTime()
+    let todayStart = new Date(y, m, d).getTime()
 
     let tx = store('tx')
 
-    let todayBalanceChange = 0
+    let todayBalanceChange = new Decimal(0)
     for (t of tx) {
         if (t.timestamp < todayStart) break
-        if (t.to === id) todayBalanceChange += t.amount
-        if (t.from === id) todayBalanceChange -= t.amount
+        if (t.to === id) todayBalanceChange = todayBalanceChange.plus(t.amount)
+        if (t.from === id) todayBalanceChange = todayBalanceChange.minus(t.amount)
     }
 
     return todayBalanceChange
@@ -34,16 +35,28 @@ app.post('/wallet', (req, res) => {
     let { name, currency, initialBalance } = req.body
 
     if (name.length === 0) {
-        return res.json({ error: 'name is empty' })
+        let error = 'name is empty'
+        console.log('wallet creation failure', error)
+        return res.json({ error })
     }
 
     if (currency !== 'ETH') {
-        return res.json({ error: 'this currency is not supported at the moment' })
+        let error = 'this currency is not supported at the moment'
+        console.log('wallet creation failure', error)
+        return res.json({ error })
     }
 
-    initialBalance = Number(initialBalance)
-    if (!(initialBalance >= 0)) {
-        return res.json({ error: 'initialBalance should be a number greater than 0' })
+    try {
+        initialBalance = new Decimal(initialBalance)
+    } catch (e) {
+        let error = 'initialBalance decimal error'
+        console.log('wallet creation failure', error)
+        return res.json({ error })
+    }
+    if (!initialBalance.gte(0)) {
+        let error = 'initialBalance should be more than 0'
+        console.log('wallet creation failure', error)
+        return res.json({ error })
     }
 
     let wallet = {
@@ -61,7 +74,7 @@ app.post('/wallet', (req, res) => {
         },
         ...wallets
     ])
-    console.log('new wallet added', wallet)
+    console.log('new wallet created', wallet)
 
     id++
 
@@ -70,12 +83,19 @@ app.post('/wallet', (req, res) => {
 
 app.get('/wallet/:id', (req, res) => {
     let { id } = req.params
+    id = Number(id)
+    if (!(id >= 0)) {
+        let error = "invalid id"
+        console.log(error)
+        return res.json({ error })
+    }
+
     let wallets = store('wallets')
-    let filtered = wallets.filter(wallet => wallet.id === Number(id))
+    let filtered = wallets.filter(wallet => wallet.id === id)
     if (filtered.length === 0) {
-        return res.json({
-            error: "this wallet no exist"
-        })
+        let error = "this wallet doesn't exist"
+        console.log(error)
+        return res.json({ error })
     }
     res.json({
         ...filtered[0],
@@ -97,63 +117,91 @@ app.post('/tx', (req, res) => {
     
     from = Number(from)
     if (!(from >= 0)) {
-        return res.json({ error: `tx failure: invalid 'from' property` })
+        let error = `invalid 'from' property`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
     to = Number(to)
     if (!(to >= 0)) {
-        return res.json({ error: `tx failure: invalid 'to' property` })
+        let error = `invalid 'to' property`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
     if (from === to) {
-        return res.json({ error: `tx failure: same 'from' and 'to'` })
+        let error = `same 'from' and 'to'`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
     let wallets = store('wallets')
 
     let fromWallet = wallets.filter(wallet => wallet.id === from)
     if (fromWallet.length === 0) {
-        return res.json({ error: `tx failure: no exist from wallet` })
+        let error = `'from' wallet doesn't exist`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
     fromWallet = fromWallet[0]
-    if (fromWallet.balance === 0) {
-        return res.json({ error: `tx failure: no balance in from wallet` })
-    }
-    if (fromWallet.balance < amount) {
-        return res.json({ error: `tx failure: amount is out of balance in from wallet` })
+    if (new Decimal(0).equals(fromWallet.balance)) {
+        let error = `no balance in 'from' wallet`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
     let toWallet = wallets.filter(wallet => wallet.id === to)
     if (toWallet.length === 0) {
-        return res.json({ error: `tx failure: no exist to wallet` })
+        let error = `'to' wallet doesn't exist`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
     toWallet = toWallet[0]
 
-    amount = Number(amount)
-    if (!(amount >= 0)) {
-        return res.json({ error: 'amount should be a number greater than 0' })
+    try {
+        amount = new Decimal(amount)
+    } catch (e) {
+        let error = 'amount decimal error'
+        console.log('tx failure', error)
+        return res.json({ error })
+    }
+    if (!amount.gt(0)) {
+        let error = 'amount should be greater than 0'
+        console.log('tx failure', error)
+        return res.json({ error })
+    }
+
+    if (amount.gt(fromWallet.balance)) {
+        let error = `amount is out of balance in 'from' wallet`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
     if (currency !== 'ETH') {
-        return res.json({ error: 'this currency is not supported at the moment' })
+        let error = `this currency is not supported at the moment`
+        console.log('tx failure', error)
+        return res.json({ error })
     }
 
-    fromWallet.balance -= amount
-    toWallet.balance += amount
+    fromWallet.balance = Decimal.sub(fromWallet.balance, amount)
+    toWallet.balance = Decimal.add(toWallet.balance, amount)
     store('wallets', wallets)
-    console.log("tx success", `${amount}${currency} moved from #${fromWallet.id}-${fromWallet.name} to #${toWallet.id}-${toWallet.name}`)
+    console.log('tx success', `${amount}${currency} moved from #${fromWallet.id}-${fromWallet.name} to #${toWallet.id}-${toWallet.name}`)
 
     let tx = store('tx')
+    let t = {
+        from,
+        to,
+        amount,
+        currency,
+        timestamp: new Date().getTime()
+    }
     store('tx', [
-        {
-            from,
-            to,
-            amount,
-            currency,
-            timestamp: new Date().getTime()
-        },
+        t,
         ...tx
     ])
+
+    res.json(t)
 })
 
 app.listen(port, () => {
